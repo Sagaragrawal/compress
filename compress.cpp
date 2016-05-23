@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <algorithm>
 #include <queue>
+#include <unordered_map>
 
 typedef ptrdiff_t Int;
 typedef size_t Uint;
@@ -85,6 +86,8 @@ struct BitArray
       v.push_back(0);
     }
   }
+  
+  void push(Int val, Int n) { for(Int i = 0; i < n; i++) push(val >> i); }
 
   void push(BitView view) { while(view.len > 0) push(read_bit(view)); }
 
@@ -298,6 +301,86 @@ namespace huffman
           return n->value;
     }
   };
+
+  void encode(Int* ptr, Int len, Int n, std::vector<Byte>& dst)
+  {
+    BitArray bits;
+    Int num_values = *std::max_element(ptr, ptr + len) + 1;
+    Int nbits = 0;
+    for(auto a = num_values; a; a >>= 1) nbits++;
+    bits.push(nbits, 8);
+
+    std::vector<Int> freq;
+    std::vector<Int> table;
+    {
+      std::vector<std::pair<Int, Int>> tmp;
+      for(Int i = 0; i < num_values; i++) tmp.emplace_back(0, i);
+      for(Int i = 0; i < len; i++) tmp[ptr[i]].first++;
+      std::sort(tmp.begin(), tmp.end(), std::greater<>());
+
+      for(Int i = 0; i < n - 1; i++)
+      {
+        freq.push_back(tmp[i].first);
+        table.push_back(tmp[i].second);
+      }
+
+      freq.push_back(0);
+      for(Int i = n - 1; i < num_values; i++) freq.back()++;
+    }
+
+    std::unordered_map<Int, Int> reverse_table;
+    for(Int i = 0; i < table.size(); i++) reverse_table.emplace(table[i], i);
+
+    std::vector<Int> encode_tree;
+    huffman::create_encode_tree(&freq[0], freq.size(), encode_tree);
+
+    bits.push(n, nbits);
+    for(auto e : table) bits.push(e, nbits);
+    for(Int i = 0; i < encode_tree.size() - 1; i++)
+      bits.push(encode_tree[i] - n, nbits);
+
+    Encoder encode(encode_tree);
+    bits.push(len, 32);
+    for(Int i = 0; i < len; i++)
+    {
+      Int val = ptr[i];
+      auto it = reverse_table.find(val);
+      if(it == reverse_table.end())
+      {
+        bits.push(encode(table.size()));
+        bits.push(val, nbits);
+      }
+      else bits.push(encode(it->second));
+    }
+
+    dst = std::move(bits.v);
+  }
+  
+  void decode(Byte* ptr, Int len, std::vector<Int>& dst)
+  {
+    BitView bits = { ptr, 0, len * bytesize };
+    Int nbits = read_bits(bits, 8); 
+    Int n = read_bits(bits, nbits);
+    std::vector<Int> table;
+    for(Int i = 0; i < n - 1; i++) table.push_back(read_bits(bits, nbits));
+    std::vector<Int> encode_tree;
+    for(Int i = 0; i < 2 * n - 2; i++)
+      encode_tree.push_back(n + read_bits(bits, nbits));
+
+    encode_tree.push_back(-1);
+
+    Decoder decode(encode_tree);
+    Int dst_len = read_bits(bits, 32);
+    dst.clear();
+    for(Int i = 0; i < dst_len; i++)
+    {
+      Int a = decode(bits);
+      if(a == table.size())
+        dst.push_back(read_bits(bits, nbits));
+      else
+        dst.push_back(table[a]);
+    }
+  }
 }
 
 char hex_digit(Int a)
@@ -306,7 +389,7 @@ char hex_digit(Int a)
   return b < 10 ? '0' + b : 'A' + (b - 10);
 }
 
-void test_encode_decode(const std::vector<Byte>& bytes, int n)
+void test_encode_decode1(const std::vector<Byte>& bytes, int n)
 {
   std::vector<Int> freq(n, 0);
   for(auto e : bytes) freq[e]++;
@@ -341,21 +424,13 @@ void test_encode_decode(const std::vector<Byte>& bytes, int n)
   for(Int i = 0; i < n; i++)
   {
     cout << i << ": ";
-    cout << encode.table[i].offset << " ";
-    for(auto e : encode.table[i].v) cout << hex_digit(e) << hex_digit(e >> 4);
-    cout << " ";
     for(auto v = encode(i); v.len > 0; ) cout << Int(read_bit(v));
     cout << endl;
   }
   
-  for(Int i = 0; i < n; i++)
-  {
-  }
-
   cout << "num diff " << ndiff << endl;
   cout << "decoded size " << decoded.size() << endl;
   cout << "encoded size " << encoded.v.size() << endl;
-
 }
 
 int main(int argc, char** argv)
@@ -364,13 +439,13 @@ int main(int argc, char** argv)
 
   if(strcmp(argv[1], "e") == 0)
   {
-    Int n = 256;
+    Int n = 128;
 
     auto img = load_pgm(argv[2]);
     std::vector<Byte> encoded;
     runlength_encode(img.ptr.get(), img.sz0 * img.sz1, n - 1, encoded);
 
-    test_encode_decode(encoded, n);
+    test_encode_decode1(encoded, n);
 
     uint16_t sz0 = img.sz0;
     uint16_t sz1 = img.sz1;
@@ -381,6 +456,23 @@ int main(int argc, char** argv)
     f.write((const char*) &sz1, sizeof(sz1));
     f.write((const char*) &len, sizeof(len));
     f.write((const char*) &encoded[0], len);
+
+    std::vector<Int> tmp_in;
+    for(auto e : encoded) tmp_in.push_back(e);
+
+    std::vector<Byte> tmp_out;
+    huffman::encode(&tmp_in[0], tmp_in.size(), 32, tmp_out);
+    cout << tmp_out.size() << endl;
+
+    std::vector<Int> tmp_out2;
+    huffman::decode(&tmp_out[0], tmp_out.size(), tmp_out2);
+    cout << tmp_in.size() << endl;
+
+    Int ndiff = 0;
+    for(Int i = 0; i < tmp_in.size(); i++)
+      ndiff += tmp_in[i] != tmp_out2[i];
+
+    cout << ndiff << endl;
   }
   else
   {
