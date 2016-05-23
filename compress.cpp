@@ -302,12 +302,18 @@ namespace huffman
     }
   };
 
+  Int needed_nbits(Int val)
+  {
+    Int nbits = 0;
+    for(auto a = val; a; a >>= 1) nbits++;
+    return nbits;
+  }
+
   void encode(Int* ptr, Int len, Int n, std::vector<Byte>& dst)
   {
     BitArray bits;
     Int num_values = *std::max_element(ptr, ptr + len) + 1;
-    Int nbits = 0;
-    for(auto a = num_values; a; a >>= 1) nbits++;
+    Int nbits = needed_nbits(num_values);
     bits.push(nbits, 8);
 
     std::vector<Int> freq;
@@ -336,8 +342,10 @@ namespace huffman
 
     bits.push(n, nbits);
     for(auto e : table) bits.push(e, nbits);
+
+    Int tree_nbits = needed_nbits(n);
     for(Int i = 0; i < encode_tree.size() - 1; i++)
-      bits.push(encode_tree[i] - n, nbits);
+      bits.push(encode_tree[i] - n, tree_nbits);
 
     Encoder encode(encode_tree);
     bits.push(len, 32);
@@ -364,8 +372,9 @@ namespace huffman
     std::vector<Int> table;
     for(Int i = 0; i < n - 1; i++) table.push_back(read_bits(bits, nbits));
     std::vector<Int> encode_tree;
+    Int tree_nbits = needed_nbits(n);
     for(Int i = 0; i < 2 * n - 2; i++)
-      encode_tree.push_back(n + read_bits(bits, nbits));
+      encode_tree.push_back(n + read_bits(bits, tree_nbits));
 
     encode_tree.push_back(-1);
 
@@ -439,7 +448,7 @@ int main(int argc, char** argv)
 
   if(strcmp(argv[1], "e") == 0)
   {
-    Int n = 1 << 16;
+    Int n = 1 << 8;
 
     auto img = load_pgm(argv[2]);
     std::vector<Int> rl_encoded;
@@ -450,7 +459,6 @@ int main(int argc, char** argv)
     uint16_t sz0 = img.sz0;
     uint16_t sz1 = img.sz1;
     uint32_t len = huff_encoded.size();
-
     std::ofstream f(argv[3], std::ios_base::binary);
     f.write((const char*) &sz0, sizeof(sz0));
     f.write((const char*) &sz1, sizeof(sz1));
