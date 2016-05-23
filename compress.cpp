@@ -144,7 +144,7 @@ void save_pgm(const Img<Byte>& img, const char* name)
   for(Int i0 = 0; i0 < (img).sz0; i0++) \
     for(Int i1 = 0; i1 < (img).sz1; i1++)
 
-void runlength_encode(const Byte* src, Int n, Int max_len, std::vector<Byte>& dst)
+void runlength_encode(const Byte* src, Int n, Int max_len, std::vector<Int>& dst)
 {
   Byte val = src[0];
   Int idx = 0;
@@ -161,7 +161,7 @@ void runlength_encode(const Byte* src, Int n, Int max_len, std::vector<Byte>& ds
   dst.push_back(n - idx);
 }
 
-void runlength_decode(const Byte* src, ptrdiff_t n, std::vector<Byte>& dst)
+void runlength_decode(const Int* src, ptrdiff_t n, std::vector<Byte>& dst)
 {
   for(Int i = 0; i < n; i += 2)
     std::fill_n(std::back_inserter(dst), src[i + 1], src[i]);
@@ -439,40 +439,23 @@ int main(int argc, char** argv)
 
   if(strcmp(argv[1], "e") == 0)
   {
-    Int n = 128;
+    Int n = 1 << 16;
 
     auto img = load_pgm(argv[2]);
-    std::vector<Byte> encoded;
-    runlength_encode(img.ptr.get(), img.sz0 * img.sz1, n - 1, encoded);
-
-    test_encode_decode1(encoded, n);
+    std::vector<Int> rl_encoded;
+    runlength_encode(img.ptr.get(), img.sz0 * img.sz1, n - 1, rl_encoded);
+    std::vector<Byte> huff_encoded;
+    huffman::encode(&rl_encoded[0], rl_encoded.size(), 32, huff_encoded);
 
     uint16_t sz0 = img.sz0;
     uint16_t sz1 = img.sz1;
-    uint32_t len = encoded.size();
+    uint32_t len = huff_encoded.size();
 
     std::ofstream f(argv[3], std::ios_base::binary);
     f.write((const char*) &sz0, sizeof(sz0));
     f.write((const char*) &sz1, sizeof(sz1));
     f.write((const char*) &len, sizeof(len));
-    f.write((const char*) &encoded[0], len);
-
-    std::vector<Int> tmp_in;
-    for(auto e : encoded) tmp_in.push_back(e);
-
-    std::vector<Byte> tmp_out;
-    huffman::encode(&tmp_in[0], tmp_in.size(), 32, tmp_out);
-    cout << tmp_out.size() << endl;
-
-    std::vector<Int> tmp_out2;
-    huffman::decode(&tmp_out[0], tmp_out.size(), tmp_out2);
-    cout << tmp_in.size() << endl;
-
-    Int ndiff = 0;
-    for(Int i = 0; i < tmp_in.size(); i++)
-      ndiff += tmp_in[i] != tmp_out2[i];
-
-    cout << ndiff << endl;
+    f.write((const char*) &huff_encoded[0], len);
   }
   else
   {
@@ -483,11 +466,14 @@ int main(int argc, char** argv)
     f.read((char*) &sz0, sizeof(sz0)); 
     f.read((char*) &sz1, sizeof(sz1));
     f.read((char*) &len, sizeof(len));
-    std::vector<Byte> encoded(len);
-    f.read((char*) &encoded[0], len);
+    std::vector<Byte> huff_encoded(len);
+    f.read((char*) &huff_encoded[0], len);
+
+    std::vector<Int> rl_encoded(len);
+    huffman::decode(&huff_encoded[0], huff_encoded.size(), rl_encoded);
 
     std::vector<Byte> decoded;
-    runlength_decode(&encoded[0], encoded.size(), decoded);
+    runlength_decode(&rl_encoded[0], rl_encoded.size(), decoded);
 
     if(decoded.size() != sz0 * sz1) return 1;
 
