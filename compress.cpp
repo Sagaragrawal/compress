@@ -391,20 +391,21 @@ namespace huffman
     }
   };
 
-  Int needed_nbits(Int val)
+  Int num_used_bits(Int val)
   {
     Int nbits = 0;
     for(auto a = val; a; a >>= 1) nbits++;
     return nbits;
   }
 
-  void encode(Int* ptr, Int len, Int n, std::vector<Byte>& dst)
+  void encode(Int* ptr, Int len, std::vector<Byte>& dst)
   {
     BitArray bits;
     Int num_values = *std::max_element(ptr, ptr + len) + 1;
-    Int nbits = needed_nbits(num_values);
+    Int nbits = num_used_bits(num_values);
     bits.push(nbits, 8);
 
+    int n;
     std::vector<Int> freq;
     std::vector<Int> table;
     {
@@ -412,6 +413,42 @@ namespace huffman
       for(Int i = 0; i < num_values; i++) tmp.emplace_back(0, i);
       for(Int i = 0; i < len; i++) tmp[ptr[i]].first++;
       std::sort(tmp.begin(), tmp.end(), std::greater<>());
+      Int sum = 0; for(auto e : tmp) sum += e.first;
+      Int log2_sum = num_used_bits(sum);  
+
+      Int n = 0;
+      bool n_initialized = false;
+      Int n_sz = 0;
+
+      Int remaining_sum = sum;
+      Int num_bits_special = 0;
+      for(Int i = 0;; i++)
+      {
+        int current_n = i + 1;
+
+        Int num_bits_general =
+          remaining_sum * (log2_sum - num_used_bits(remaining_sum) + nbits);
+
+        Int tree_nbits = num_used_bits(i);
+        Int sz = 
+          num_bits_general +
+          num_bits_special +
+          (current_n - 1) * nbits +
+          (2 * current_n - 1) * tree_nbits;
+
+        if(!n_initialized || sz < n_sz)
+        {
+          n_sz = sz;
+          n = current_n;
+          n_initialized = true;
+        }
+
+        if(remaining_sum == 0 || i == tmp.size()) break;
+
+        Int freq = tmp[i].first;
+        num_bits_special += (log2_sum - num_used_bits(freq)) * freq;
+        remaining_sum -= freq;
+      }
 
       for(Int i = 0; i < n - 1; i++)
       {
@@ -432,7 +469,7 @@ namespace huffman
     bits.push(n, nbits);
     for(auto e : table) bits.push(e, nbits);
 
-    Int tree_nbits = needed_nbits(n);
+    Int tree_nbits = num_used_bits(n);
     for(Int i = 0; i < encode_tree.size() - 1; i++)
       bits.push(encode_tree[i] - n, tree_nbits);
 
@@ -461,7 +498,7 @@ namespace huffman
     std::vector<Int> table;
     for(Int i = 0; i < n - 1; i++) table.push_back(read_bits(bits, nbits));
     std::vector<Int> encode_tree;
-    Int tree_nbits = needed_nbits(n);
+    Int tree_nbits = num_used_bits(n);
     for(Int i = 0; i < 2 * n - 2; i++)
       encode_tree.push_back(n + read_bits(bits, tree_nbits));
 
@@ -556,7 +593,7 @@ int main(int argc, char** argv)
 
     std::vector<Byte> huff_encoded;
     //for(Int i = 0; i < 1000; i++)
-    huffman::encode(&intermediate[0], intermediate.size(), 20, huff_encoded);
+    huffman::encode(&intermediate[0], intermediate.size(), huff_encoded);
 
     auto end_huff = std::chrono::system_clock::now();
 
