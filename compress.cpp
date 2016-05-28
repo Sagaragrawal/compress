@@ -167,6 +167,95 @@ void runlength_decode(const Int* src, ptrdiff_t n, std::vector<Byte>& dst)
     std::fill_n(std::back_inserter(dst), src[i + 1], src[i]);
 }
 
+Int wrap_lo(Int a, Int len) { return a >= 0 ? a : a + len; }
+Int wrap_hi(Int a, Int len) { return a < len ? a : a - len; }
+
+template<typename T>
+void encode_img(const Img<T>& img, std::vector<Int>& dst)
+{
+  dst.push_back(img.sz0);  
+  dst.push_back(img.sz1);
+  Img<bool> visited(img.sz0, img.sz1);
+  Int prev_i0 = 0;
+  Int prev_i1 = 0;
+  for_img(img, i0, i1)
+    if((i1 == 0 || img(i0, i1) != img(i0, i1 - 1)) && !visited(i0, i1))
+    {
+      Int color = img(i0, i1);
+      visited(i0, i1) = true;
+      dst.push_back(img.sz1 + color);
+      dst.push_back(i0 - prev_i0);
+      dst.push_back(wrap_lo(i1 - prev_i1, img.sz1));
+      prev_i0 = i0;
+      prev_i1 = i1;
+
+      Int j1 = i1;
+      for(Int j0 = i0 + 1; j0 < img.sz0; j0++)
+      {
+        Int prev_j1 = j1;
+        if(img(j0, j1) == color)
+        {
+          for(; j1 > 0 && img(j0, j1 - 1) == color; j1--) { } 
+
+          if(!visited(j0, j1))
+          {
+            visited(j0, j1) = true;
+            dst.push_back(wrap_lo(j1 - prev_j1, img.sz1));
+          }
+          else break;
+        }
+        else
+        {
+          for(
+            j1++;
+            j1 < img.sz1 && img(j0 - 1, j1) == color && img(j0, j1) != color;
+            j1++) { }
+
+          if(j1 < img.sz1 && img(j0, j1) == color && !visited(j0, j1))
+          {
+            visited(j0, j1) = true;
+            dst.push_back(wrap_lo(j1 - prev_j1, img.sz1));
+          }
+          else break;
+        }
+      } 
+    }
+}
+
+Img<Byte> decode_img(Int* ptr, Int len)
+{
+  Int* end = ptr + len;
+  Int sz0 = *ptr; ptr++;
+  Int sz1 = *ptr; ptr++;
+  Int i0 = 0;
+  Int i1 = 0;
+  Img<Byte> img(sz0, sz1);
+  Int color = *ptr - sz1; ptr++;
+  while(ptr < end)
+  {
+    i0 = i0 + *ptr; ptr++;
+    i1 = wrap_hi(i1 + *ptr, sz1); ptr++;
+    Int j0 = i0;
+    Int j1 = i1; 
+    img(j0, j1) = color;
+    while(ptr < end)
+    {
+      int a = *ptr; ptr++;
+      if(a >= sz1)
+      {
+        color = a - sz1;
+        break;
+      }
+
+      j1 = wrap_hi(j1 + a, sz1);
+      j0++;
+      img(j0, j1) = color;
+    }
+  }
+
+  return img;
+}
+
 namespace huffman
 {
   void create_encode_tree(Int* freq, Int freq_len, std::vector<Int>& dst)
@@ -444,6 +533,8 @@ void test_encode_decode1(const std::vector<Byte>& bytes, int n)
 
 int main(int argc, char** argv)
 {
+  typedef std::chrono::duration<double> Dur;
+
   if(argc != 4) return 1;
 
   if(strcmp(argv[1], "e") == 0)
@@ -451,10 +542,27 @@ int main(int argc, char** argv)
     Int n = 1 << 8;
 
     auto img = load_pgm(argv[2]);
-    std::vector<Int> rl_encoded;
-    runlength_encode(img.ptr.get(), img.sz0 * img.sz1, n - 1, rl_encoded);
+    std::vector<Int> intermediate;
+
+    auto start = std::chrono::system_clock::now();
+
+#if 0
+    runlength_encode(img.ptr.get(), img.sz0 * img.sz1, n - 1, intermediate);
+#else
+    encode_img(img, intermediate);
+#endif
+
+    auto end_ei = std::chrono::system_clock::now();
+
     std::vector<Byte> huff_encoded;
-    huffman::encode(&rl_encoded[0], rl_encoded.size(), 32, huff_encoded);
+    //for(Int i = 0; i < 1000; i++)
+    huffman::encode(&intermediate[0], intermediate.size(), 20, huff_encoded);
+
+    auto end_huff = std::chrono::system_clock::now();
+
+    cout <<
+      Dur(end_ei - start).count() << " " <<
+      Dur(end_huff - end_ei).count() << endl;
 
     uint16_t sz0 = img.sz0;
     uint16_t sz1 = img.sz1;
@@ -477,16 +585,21 @@ int main(int argc, char** argv)
     std::vector<Byte> huff_encoded(len);
     f.read((char*) &huff_encoded[0], len);
 
-    std::vector<Int> rl_encoded(len);
-    huffman::decode(&huff_encoded[0], huff_encoded.size(), rl_encoded);
+    std::vector<Int> intermediate(len);
+    //for(Int i = 0; i < 1000; i++)
+    huffman::decode(&huff_encoded[0], huff_encoded.size(), intermediate);
 
     std::vector<Byte> decoded;
-    runlength_decode(&rl_encoded[0], rl_encoded.size(), decoded);
 
+#if 0
+    runlength_decode(&intermediate[0], intermediate.size(), decoded);
     if(decoded.size() != sz0 * sz1) return 1;
-
     auto img = Img<Byte>(sz0, sz1);
     std::copy(decoded.begin(), decoded.end(), img.ptr.get());
+#else
+    auto img = decode_img(&intermediate[0], intermediate.size());
+#endif
+
     save_pgm(img, argv[3]);    
   }
 
