@@ -46,7 +46,6 @@ struct BitView
 
 Int read_bit(BitView& bits)
 {
-  //cout << "(rb " << Int(bits.ptr[0]) << " " << bits.offset << ")";
   bool r = (bits.ptr[0] >> bits.offset) & 1;
   bits.offset++;
   bits.len--;
@@ -145,29 +144,6 @@ void save_pgm(const Img<Byte>& img, const char* name)
   for(Int i0 = 0; i0 < (img).sz0; i0++) \
     for(Int i1 = 0; i1 < (img).sz1; i1++)
 
-void runlength_encode(const Byte* src, Int n, Int max_len, std::vector<Int>& dst)
-{
-  Byte val = src[0];
-  Int idx = 0;
-  for(Int i = 1; i < n; i++)
-    if(src[i] != val || i - idx == max_len)
-    {
-      dst.push_back(val);
-      dst.push_back(i - idx);
-      val = src[i]; 
-      idx = i;
-    }
-
-  dst.push_back(val);
-  dst.push_back(n - idx);
-}
-
-void runlength_decode(const Int* src, ptrdiff_t n, std::vector<Byte>& dst)
-{
-  for(Int i = 0; i < n; i += 2)
-    std::fill_n(std::back_inserter(dst), src[i + 1], src[i]);
-}
-
 Int wrap_lo(Int a, Int len) { return a >= 0 ? a : a + len; }
 Int wrap_hi(Int a, Int len) { return a < len ? a : a - len; }
 
@@ -231,6 +207,7 @@ Img<Byte> decode_img(Int* ptr, Int len)
   Int i0 = 0;
   Int i1 = 0;
   Img<Byte> img(sz0, sz1);
+  Img<bool> transition(sz0, sz1);
   Int color = *ptr - sz1; ptr++;
   while(ptr < end)
   {
@@ -239,6 +216,7 @@ Img<Byte> decode_img(Int* ptr, Int len)
     Int j0 = i0;
     Int j1 = i1; 
     img(j0, j1) = color;
+    transition(j0, j1) = 1;
     while(ptr < end)
     {
       int a = *ptr; ptr++;
@@ -251,8 +229,15 @@ Img<Byte> decode_img(Int* ptr, Int len)
       j1 = wrap_hi(j1 + a, sz1);
       j0++;
       img(j0, j1) = color;
+      transition(j0, j1) = 1;
     }
   }
+
+  for_img(img, i0, i1)
+    if(transition(i0, i1))
+      color = img(i0, i1);
+    else
+      img(i0, i1) = color;
 
   return img;
 }
@@ -285,15 +270,6 @@ namespace huffman
     }
   }
 
-  Int encoded_len(Int* freq, Int freq_len, const std::vector<Int>& tree)
-  {
-    Int r = 0;
-    for(Int i = 0; i < freq_len; i++)
-      for(Int j = i; j != -1; j = tree[j]) r += freq[i];
-
-    return r;
-  }
-
   struct Node
   {
     Int value;
@@ -305,20 +281,6 @@ namespace huffman
       children[1].reset(child1);
     }
   };
-
-  void print_node(Node* n)
-  {
-    if(n->children[0])
-    {
-      cout << "(";
-      print_node(n->children[0].get());
-      cout << " ";
-      print_node(n->children[1].get());
-      cout << ")";
-    }
-    else
-      cout << n->value;
-  }
 
   std::unique_ptr<Node> create_child_tree(const std::vector<Int>& parent_tree)
   {
@@ -399,7 +361,6 @@ namespace huffman
     return nbits;
   }
 
-
   Int estimate_optimal_num_codes(Int* freq, Int freq_len, Int nbits)
   {
     Int sum = std::accumulate(freq, freq + freq_len, Int(0));
@@ -436,6 +397,8 @@ namespace huffman
       num_bits_special += (log2_sum - num_used_bits(freq[i])) * freq[i];
       remaining_sum -= freq[i];
     }
+
+    cout << "Optimal " << n << " " << n_sz << endl;
 
     return n;
   }
@@ -533,56 +496,6 @@ namespace huffman
   }
 }
 
-char hex_digit(Int a)
-{
-  Int b = a & 0xf;
-  return b < 10 ? '0' + b : 'A' + (b - 10);
-}
-
-void test_encode_decode1(const std::vector<Byte>& bytes, int n)
-{
-  std::vector<Int> freq(n, 0);
-  for(auto e : bytes) freq[e]++;
-
-  std::vector<Int> encode_tree;
-  huffman::create_encode_tree(&freq[0], freq.size(), encode_tree);
-
-  BitArray encoded;
-  huffman::Encoder encode(encode_tree);
-  for(auto e : bytes)
-  {
-    auto tmp = encode(e);
-    encoded.push(tmp);
-    cout << "e " << Int(e) << endl;
-  }
-
-  huffman::Decoder decode(encode_tree);
-   
-  BitView v = encoded.get_view();
-  std::vector<Int> decoded;
-  while(decoded.size() < bytes.size())
-    decoded.push_back(decode(v));
-
-  Int ndiff = 0;
-  for(Int i = 0; i < bytes.size(); i++)
-    if(bytes[i] != decoded[i])
-      ndiff++;
-
-  for(Int i = 0; i < freq.size(); i++)
-    cout << "freq " << i << " " << freq[i] << endl;
-
-  for(Int i = 0; i < n; i++)
-  {
-    cout << i << ": ";
-    for(auto v = encode(i); v.len > 0; ) cout << Int(read_bit(v));
-    cout << endl;
-  }
-  
-  cout << "num diff " << ndiff << endl;
-  cout << "decoded size " << decoded.size() << endl;
-  cout << "encoded size " << encoded.v.size() << endl;
-}
-
 int main(int argc, char** argv)
 {
   typedef std::chrono::duration<double> Dur;
@@ -598,11 +511,7 @@ int main(int argc, char** argv)
 
     auto start = std::chrono::system_clock::now();
 
-#if 0
-    runlength_encode(img.ptr.get(), img.sz0 * img.sz1, n - 1, intermediate);
-#else
     encode_img(img, intermediate);
-#endif
 
     auto end_ei = std::chrono::system_clock::now();
 
@@ -643,15 +552,7 @@ int main(int argc, char** argv)
 
     std::vector<Byte> decoded;
 
-#if 0
-    runlength_decode(&intermediate[0], intermediate.size(), decoded);
-    if(decoded.size() != sz0 * sz1) return 1;
-    auto img = Img<Byte>(sz0, sz1);
-    std::copy(decoded.begin(), decoded.end(), img.ptr.get());
-#else
     auto img = decode_img(&intermediate[0], intermediate.size());
-#endif
-
     save_pgm(img, argv[3]);    
   }
 
