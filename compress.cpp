@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <queue>
 #include <unordered_map>
+#include <numeric>
 
 typedef ptrdiff_t Int;
 typedef size_t Uint;
@@ -398,6 +399,47 @@ namespace huffman
     return nbits;
   }
 
+
+  Int estimate_optimal_num_codes(Int* freq, Int freq_len, Int nbits)
+  {
+    Int sum = std::accumulate(freq, freq + freq_len, Int(0));
+    Int log2_sum = num_used_bits(sum);  
+
+    Int n = 0;
+    bool n_initialized = false;
+    Int n_sz = 0;
+
+    Int remaining_sum = sum;
+    Int num_bits_special = 0;
+    for(Int i = 0;; i++)
+    {
+      int current_n = i + 1;
+
+      Int num_bits_general =
+        remaining_sum * (log2_sum - num_used_bits(remaining_sum) + nbits);
+
+      Int tree_nbits = num_used_bits(i);
+      Int sz = 
+        num_bits_general +
+        num_bits_special +
+        (current_n - 1) * nbits +
+        (2 * current_n - 1) * tree_nbits;
+
+      if(!n_initialized || sz < n_sz)
+      {
+        n_sz = sz;
+        n = current_n;
+        n_initialized = true;
+      }
+
+      if(remaining_sum == 0 || i == freq_len) break;
+      num_bits_special += (log2_sum - num_used_bits(freq[i])) * freq[i];
+      remaining_sum -= freq[i];
+    }
+
+    return n;
+  }
+
   void encode(Int* ptr, Int len, std::vector<Byte>& dst)
   {
     BitArray bits;
@@ -405,7 +447,7 @@ namespace huffman
     Int nbits = num_used_bits(num_values);
     bits.push(nbits, 8);
 
-    int n;
+    Int n = 0;
     std::vector<Int> freq;
     std::vector<Int> table;
     {
@@ -413,42 +455,13 @@ namespace huffman
       for(Int i = 0; i < num_values; i++) tmp.emplace_back(0, i);
       for(Int i = 0; i < len; i++) tmp[ptr[i]].first++;
       std::sort(tmp.begin(), tmp.end(), std::greater<>());
-      Int sum = 0; for(auto e : tmp) sum += e.first;
-      Int log2_sum = num_used_bits(sum);  
-
-      Int n = 0;
-      bool n_initialized = false;
-      Int n_sz = 0;
-
-      Int remaining_sum = sum;
-      Int num_bits_special = 0;
-      for(Int i = 0;; i++)
+      for(auto e : tmp)
       {
-        int current_n = i + 1;
-
-        Int num_bits_general =
-          remaining_sum * (log2_sum - num_used_bits(remaining_sum) + nbits);
-
-        Int tree_nbits = num_used_bits(i);
-        Int sz = 
-          num_bits_general +
-          num_bits_special +
-          (current_n - 1) * nbits +
-          (2 * current_n - 1) * tree_nbits;
-
-        if(!n_initialized || sz < n_sz)
-        {
-          n_sz = sz;
-          n = current_n;
-          n_initialized = true;
-        }
-
-        if(remaining_sum == 0 || i == tmp.size()) break;
-
-        Int freq = tmp[i].first;
-        num_bits_special += (log2_sum - num_used_bits(freq)) * freq;
-        remaining_sum -= freq;
+        freq.push_back(e.first);
+        table.push_back(e.second);
       }
+
+      n = estimate_optimal_num_codes(&freq[0], freq.size(), nbits);
 
       for(Int i = 0; i < n - 1; i++)
       {
@@ -456,6 +469,8 @@ namespace huffman
         table.push_back(tmp[i].second);
       }
 
+      table.resize(n - 1);
+      freq.resize(n - 1);
       freq.push_back(0);
       for(Int i = n - 1; i < num_values; i++) freq.back()++;
     }
